@@ -1,0 +1,27 @@
+# 这是公共仓库：默认忽略一切，只放行下面列出的源码和文档，
+# 避免 API 密钥、个人配置（config.yaml）、模型文件、日志被误提交。
+/*
+!/.gitignore
+!/.gitattributes
+!/.github/
+!/assets/
+!/swap_panel.pyw
+!/build.bat
+!/config.example.yaml
+!/requirements.txt
+!/README.md
+!/CHANGELOG.md
+!/LICENSE
+
+# ---- 以下即使出现在放行的目录里也不提交 ----
+config.yaml
+settings.json
+panel_prefs.json
+api-key*.txt
+*.key
+.env
+*.log
+*.gguf
+*.bin
+__pycache__/
+*.pyc

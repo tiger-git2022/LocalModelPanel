@@ -1,0 +1,31 @@
+# llama-swap 配置示例（复制成 config.yaml，和 llama-swap.exe 放在同一个文件夹，再按自己的路径修改）
+# 完整说明见 https://github.com/mostlygeek/llama-swap
+# 面板会读取这里的 models（显示模型卡片）和 apiKeys（调用接口时使用）。
+
+healthCheckTimeout: 300
+logLevel: info
+startPort: 10001
+globalTTL: 300          # 模型空闲 300 秒后自动卸载
+
+# 只在本机用可以删掉 apiKeys；监听地址不是 127.0.0.1 时（比如给局域网或 Tailscale 里的设备用），务必设置。
+apiKeys:
+  - "换成你自己的随机字符串"
+
+macros:
+  "server": "C:\\llama.cpp\\llama-server.exe --host 127.0.0.1 --port ${PORT} -np 1 -fa on --jinja"
+
+models:
+  "hymt2":
+    name: "Hy-MT2-7B（翻译）"
+    description: "腾讯混元翻译模型，约 8.5 GB 显存"
+    cmd: "${server} -m D:\\models\\HY-MT2-7B-Q6_K.gguf -ngl 99 -c 16384"
+
+  "qwen":
+    name: "Qwen 通用模型"
+    description: "通用对话模型"
+    cmd: "${server} -m D:\\models\\your-model.gguf -ngl 99 -c 16384"
+
+  # 语音识别模型（whisper.cpp 的 whisper-server），ID 里带 whisper 的会显示为麦克风图标
+  "whisper":
+    name: "Whisper 语音识别"
+    cmd: "C:\\whisper.cpp\\whisper-server.exe --host 127.0.0.1 --port ${PORT} -m D:\\models\\ggml-large-v3-q8_0.bin --inference-path /v1/audio/transcriptions"
