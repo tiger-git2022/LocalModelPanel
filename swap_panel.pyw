@@ -1025,18 +1025,44 @@ def run_gui(command=None):
     app.exec()
 
 
+def selftest():
+    out = os.environ.get("SELFTEST_LOG")
+    lines = []
+
+    def say(msg):
+        lines.append(msg)
+        if sys.stdout:  # 打包成无控制台程序时 stdout 是 None
+            print(msg, flush=True)
+        if out:
+            with open(out, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+
+    steps = [("图标文件", lambda: os.path.isfile(ICON_ICO) and os.path.isfile(ICON_PNG) or 1 / 0),
+             ("导入 PySide6", lambda: __import__("PySide6.QtWidgets")),
+             ("导入 qfluentwidgets", lambda: __import__("qfluentwidgets")),
+             ("创建快捷方式对象", lambda: make_shortcut(None, "--start", "启动服务")),
+             ("登记任务栏快捷项", register_jump_list),
+             ("读取 config 示例", lambda: config_models)]
+    ok = True
+    for name, fn in steps:
+        try:
+            fn()
+            say(f"[通过] {name}")
+        except Exception:  # noqa: BLE001
+            ok = False
+            say(f"[失败] {name}\n{traceback.format_exc()}")
+    say(f"selftest {'ok' if ok else 'FAILED'} {APP_VERSION}")
+    if not ok:
+        sys.exit(1)
+
+
 def main():
     args = sys.argv[1:]
     if "--autostart" in args:
         autostart_mode()
         return
     if "--selftest" in args:  # 打包检查用：不打开窗口，只检查依赖和快捷方式相关接口
-        import PySide6, qfluentwidgets  # noqa: F401,E401
-        assert os.path.isfile(ICON_ICO) and os.path.isfile(ICON_PNG), "缺少图标文件"
-        make_shortcut(None, "--start", "启动服务")
-        register_jump_list()
-        if sys.stdout:  # 打包成无控制台程序时 stdout 是 None
-            print("selftest ok", APP_VERSION)
+        selftest()
         return
     cmd = next((a for a in args if a in COMMANDS), None)
     try:

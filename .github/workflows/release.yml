@@ -12,6 +12,10 @@ on:
 permissions:
   contents: write
 
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+
 jobs:
   build:
     runs-on: windows-latest
@@ -39,7 +43,10 @@ jobs:
         run: python -m pip install -r requirements.txt pyinstaller
 
       - name: 源码自检
-        run: python swap_panel.pyw --selftest
+        shell: pwsh
+        run: |
+          python -X faulthandler swap_panel.pyw --selftest 2>&1 | Out-Host
+          if ($LASTEXITCODE) { Write-Error "源码自检失败，退出码 $LASTEXITCODE"; exit 1 }
 
       - name: 打包
         shell: pwsh
@@ -52,8 +59,11 @@ jobs:
       - name: 打包后自检
         shell: pwsh
         run: |
+          $env:SELFTEST_LOG = "$PWD/out/selftest.txt"
           $p = Start-Process out/LocalModelPanel/LocalModelPanel.exe -ArgumentList "--selftest" -PassThru
-          if (-not $p.WaitForExit(120000)) { $p.Kill(); Write-Error "自检超时（可能弹出了错误窗口）"; exit 1 }
+          $done = $p.WaitForExit(120000)
+          if (Test-Path $env:SELFTEST_LOG) { Get-Content $env:SELFTEST_LOG -Encoding utf8 | Out-Host }
+          if (-not $done) { $p.Kill(); Write-Error "自检超时（可能弹出了错误窗口）"; exit 1 }
           if ($p.ExitCode -ne 0) { Write-Error "自检失败，退出码 $($p.ExitCode)"; exit 1 }
           "打包后的 exe 自检通过"
 
