@@ -24,7 +24,7 @@ import traceback
 import urllib.request
 
 APP_NAME = "本地模型管理"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 APP_ID = "local.llama-swap.panel"  # Windows AppUserModelID：任务栏分组、跳转列表都靠它对应
 INSTANCE = "llama-swap-panel"
 FROZEN = getattr(sys, "frozen", False)
@@ -499,8 +499,10 @@ def run_gui(command=None):
                                 FluentWindow, IconWidget, InfoBar, InfoBarPosition, LineEdit, MessageBoxBase,
                                 NavigationItemPosition, PasswordLineEdit, PrimaryPushButton, ProgressBar, PushButton,
                                 PushSettingCard, ScrollArea, SettingCard, SettingCardGroup, Slider, StrongBodyLabel,
-                                SubtitleLabel, SwitchButton, SystemTrayMenu, Theme, TitleLabel, isDarkTheme, setTheme,
+                                SubtitleLabel, SwitchButton, Theme, TitleLabel, isDarkTheme, setTheme,
                                 setThemeColor)
+    # 托盘右键菜单用亚克力样式（截取菜单后面的屏幕做模糊，半透明圆角，随深浅色主题）
+    from qfluentwidgets.components.material import AcrylicSystemTrayMenu
 
     THEMES = [("浅色", Theme.LIGHT), ("深色", Theme.DARK), ("跟随系统", Theme.AUTO)]
     # Win11 DWMWA_SYSTEMBACKDROP_TYPE：2=云母 3=亚克力（模糊透出窗口后面的内容） 4=云母 Alt；0 表示不用特效
@@ -682,7 +684,7 @@ def run_gui(command=None):
 
             self.tray = QSystemTrayIcon(status_icon(YELLOW), self)
             self.tray.setToolTip(APP_NAME)
-            menu = SystemTrayMenu(parent=self)
+            menu = AcrylicSystemTrayMenu(parent=self)
             self.act_start = Action(FIF.PLAY, "启动服务", triggered=lambda: self.run(start_swap, "服务已启动"))
             self.act_stop = Action(FIF.PAUSE, "停止服务", triggered=lambda: self.run(stop_swap, "服务已停止"))
             self.act_unload = Action(FIF.DELETE, "卸载模型", triggered=lambda: self.run(unload, "已卸载模型"))
@@ -1139,6 +1141,8 @@ def selftest():
     steps = [("图标文件", lambda: os.path.isfile(ICON_ICO) and os.path.isfile(ICON_PNG) or 1 / 0),
              ("导入 PySide6", lambda: __import__("PySide6.QtWidgets")),
              ("导入 qfluentwidgets", lambda: __import__("qfluentwidgets")),
+             # 亚克力模糊要用 scipy / pillow / colorthief，缺了菜单会变成不模糊的半透明
+             ("导入亚克力模糊依赖", lambda: __import__("qfluentwidgets.common.image_utils")),
              ("创建快捷方式对象", lambda: _release(make_shortcut(None, "--start", "启动服务"))),
              ("登记任务栏快捷项", register_jump_list),
              ("读取 config 示例", lambda: config_models)]
@@ -1152,6 +1156,13 @@ def selftest():
         w.handle_command("--show")
         w.render({"alive": True, "ok": True, "running": {"x": "ready"}, "vram": (1.0, 8.0)})
         w.render({"alive": False, "ok": False, "running": {}, "vram": None})
+        menu = w.tray.contextMenu()  # 托盘菜单是亚克力样式，并且能打开
+        if type(menu).__name__ != "AcrylicSystemTrayMenu":
+            raise RuntimeError(f"托盘菜单不是亚克力样式：{type(menu).__name__}")
+        from PySide6.QtWidgets import QApplication
+        menu.exec(w.geometry().center())
+        QApplication.processEvents()
+        menu.close()
 
     def gui():
         SELFTEST_GUI.append(gui_check)
