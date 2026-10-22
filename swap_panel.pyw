@@ -304,24 +304,107 @@ def launch_target(args):
     return pyw, f'"{os.path.abspath(__file__)}" {args}'.strip()
 
 
+# ---------- 快捷方式和任务栏右键菜单（直接用 ctypes 调 Windows COM 接口，不依赖 pywin32） ----------
+
+class _GUID(ctypes.Structure):
+    _fields_ = [("d1", ctypes.c_uint32), ("d2", ctypes.c_uint16), ("d3", ctypes.c_uint16), ("d4", ctypes.c_ubyte * 8)]
+
+    def __init__(self, text):
+        super().__init__()
+        ctypes.oledll.ole32.CLSIDFromString(ctypes.c_wchar_p("{%s}" % text), ctypes.byref(self))
+
+
+class _PROPERTYKEY(ctypes.Structure):
+    _fields_ = [("fmtid", _GUID), ("pid", ctypes.c_uint32)]
+
+
+class _PROPVARIANT(ctypes.Structure):
+    _fields_ = [("vt", ctypes.c_ushort), ("r1", ctypes.c_ushort), ("r2", ctypes.c_ushort), ("r3", ctypes.c_ushort),
+                ("ptr", ctypes.c_void_p), ("pad", ctypes.c_void_p)]
+
+
+CLSID_ShellLink = "00021401-0000-0000-C000-000000000046"
+IID_IShellLinkW = "000214F9-0000-0000-C000-000000000046"
+IID_IPropertyStore = "886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"
+IID_IPersistFile = "0000010b-0000-0000-C000-000000000046"
+CLSID_DestinationList = "77f10cf0-3db5-4966-b520-b7c54fd35ed6"
+IID_ICustomDestinationList = "6332debf-87b5-4670-90c0-5e57b408a49e"
+CLSID_EnumerableObjectCollection = "2d3468c1-36a7-43b6-ac24-d3f02fd9607a"
+IID_IObjectCollection = "5632b1a4-e38a-400a-928a-d4cd63230295"
+IID_IObjectArray = "92ca9dcd-5622-4bba-a805-5e9f541bd8c9"
+PKEY_TITLE = ("F29F85E0-4FF9-1068-AB91-08002B27B3D9", 2)
+PKEY_APP_ID = ("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3", 5)
+VT_LPWSTR = 31
+
+
+def _com(ptr, index, *argtypes):
+    """取 COM 对象虚表里第 index 个方法；返回值是 HRESULT，失败时 ctypes 会抛 OSError。"""
+    vtbl = ctypes.cast(ptr, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)))[0]
+    fn = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, *argtypes)(vtbl[index])
+    return lambda *a: fn(ptr, *a)
+
+
+def _release(ptr):
+    if ptr:
+        vtbl = ctypes.cast(ptr, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)))[0]
+        ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vtbl[2])(ptr)
+
+
+def _create(clsid, iid):
+    ole32 = ctypes.oledll.ole32
+    try:
+        ole32.CoInitialize(None)
+    except OSError:
+        pass  # 已经初始化过（比如 Qt 用了另一种模式），不影响后面的调用
+    ptr = ctypes.c_void_p()
+    ole32.CoCreateInstance(ctypes.byref(_GUID(clsid)), None, 1, ctypes.byref(_GUID(iid)), ctypes.byref(ptr))
+    return ptr.value
+
+
+def _query(ptr, iid):
+    out = ctypes.c_void_p()
+    _com(ptr, 0, ctypes.c_void_p, ctypes.c_void_p)(ctypes.byref(_GUID(iid)), ctypes.byref(out))
+    return out.value
+
+
+def _set_string_prop(store, key_, text):
+    pk = _PROPERTYKEY(_GUID(key_[0]), key_[1])
+    buf = ctypes.create_unicode_buffer(text)
+    pv = _PROPVARIANT(vt=VT_LPWSTR, ptr=ctypes.cast(buf, ctypes.c_void_p).value)
+    _com(store, 6, ctypes.c_void_p, ctypes.c_void_p)(ctypes.byref(pk), ctypes.byref(pv))  # IPropertyStore::SetValue
+
+
 def make_shortcut(path, args, title, desc=""):
-    """创建快捷方式，并写入 AppUserModelID，让它和面板窗口在任务栏归为同一个程序。"""
-    import pythoncom
-    from win32com.propsys import propsys, pscon
-    from win32com.shell import shell
+    """创建快捷方式（IShellLinkW），写入 AppUserModelID，让它和面板窗口在任务栏归为同一个程序。
+    path 为 None 时不保存成文件，返回 COM 指针（给任务栏右键菜单用，调用方负责释放）。"""
     target, arguments = launch_target(args)
-    link = pythoncom.CoCreateInstance(shell.CLSID_ShellLink, None, pythoncom.CLSCTX_INPROC_SERVER, shell.IID_IShellLink)
-    link.SetPath(target)
-    link.SetArguments(arguments)
-    link.SetWorkingDirectory(APP_DIR)
-    link.SetIconLocation(sys.executable if FROZEN else ICON_ICO, 0)
-    link.SetDescription(desc or title)
-    store = link.QueryInterface(propsys.IID_IPropertyStore)
-    store.SetValue(pscon.PKEY_AppUserModel_ID, propsys.PROPVARIANTType(APP_ID, pythoncom.VT_LPWSTR))
-    store.SetValue(pscon.PKEY_Title, propsys.PROPVARIANTType(title, pythoncom.VT_LPWSTR))
-    store.Commit()
+    w = ctypes.c_wchar_p
+    link = _create(CLSID_ShellLink, IID_IShellLinkW)
+    try:
+        _com(link, 20, w)(target)  # SetPath
+        _com(link, 11, w)(arguments)  # SetArguments
+        _com(link, 9, w)(APP_DIR)  # SetWorkingDirectory
+        _com(link, 17, w, ctypes.c_int)(sys.executable if FROZEN else ICON_ICO, 0)  # SetIconLocation
+        _com(link, 7, w)(desc or title)  # SetDescription
+        store = _query(link, IID_IPropertyStore)
+        try:
+            _set_string_prop(store, PKEY_APP_ID, APP_ID)
+            _set_string_prop(store, PKEY_TITLE, title)
+            _com(store, 7)()  # Commit
+        finally:
+            _release(store)
+        if path:
+            pf = _query(link, IID_IPersistFile)
+            try:
+                _com(pf, 6, w, ctypes.c_int)(path, 1)  # IPersistFile::Save
+            finally:
+                _release(pf)
+    except Exception:
+        _release(link)
+        raise
     if path:
-        link.QueryInterface(pythoncom.IID_IPersistFile).Save(path, 0)
+        _release(link)
+        return None
     return link
 
 
@@ -330,26 +413,33 @@ JUMP_TASKS = [("显示面板", "--show"), ("启动服务", "--start"), ("停止�
 
 def register_jump_list():
     """任务栏按钮右键菜单（跳转列表）里的“任务”：显示面板 / 启动服务 / 停止服务 / 卸载模型。"""
-    import pythoncom
-    from win32com.shell import shell
-    pythoncom.CoInitialize()
-    dl = pythoncom.CoCreateInstance(shell.CLSID_DestinationList, None, pythoncom.CLSCTX_INPROC_SERVER,
-                                    shell.IID_ICustomDestinationList)
-    dl.SetAppID(APP_ID)
-    dl.BeginList(shell.IID_IObjectArray)
-    coll = pythoncom.CoCreateInstance(shell.CLSID_EnumerableObjectCollection, None, pythoncom.CLSCTX_INPROC_SERVER,
-                                      shell.IID_IObjectCollection)
-    for title, args in JUMP_TASKS:
-        coll.AddObject(make_shortcut(None, args, title))
-    dl.AddUserTasks(coll.QueryInterface(shell.IID_IObjectArray))
-    dl.CommitList()
+    dl = _create(CLSID_DestinationList, IID_ICustomDestinationList)
+    coll = removed = None
+    links = []
+    try:
+        _com(dl, 3, ctypes.c_wchar_p)(APP_ID)  # SetAppID
+        slots, removed_p = ctypes.c_uint(), ctypes.c_void_p()
+        _com(dl, 4, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(  # BeginList
+            ctypes.byref(slots), ctypes.byref(_GUID(IID_IObjectArray)), ctypes.byref(removed_p))
+        removed = removed_p.value
+        coll = _create(CLSID_EnumerableObjectCollection, IID_IObjectCollection)
+        for title, args in JUMP_TASKS:
+            links.append(make_shortcut(None, args, title))
+            _com(coll, 5, ctypes.c_void_p)(links[-1])  # IObjectCollection::AddObject
+        _com(dl, 7, ctypes.c_void_p)(coll)  # AddUserTasks（IObjectCollection 继承自 IObjectArray）
+        _com(dl, 8)()  # CommitList
+    finally:
+        for p in links + [coll, removed, dl]:
+            _release(p)
 
 
 def create_shortcuts():
-    """在桌面和开始菜单创建“本地模型管理”快捷方式（带 AppUserModelID，固定到任务栏后右键菜单也有快捷项）。"""
-    from win32com.shell import shell, shellcon
-    desktop = shell.SHGetFolderPath(0, shellcon.CSIDL_DESKTOPDIRECTORY, None, 0)
-    paths = [os.path.join(desktop, APP_NAME + ".lnk"), os.path.join(PROGRAMS_DIR, APP_NAME + ".lnk")]
+    """在桌面和开始菜单创建快捷方式（带 AppUserModelID，固定到任务栏后右键菜单也有快捷项）。"""
+    buf = ctypes.create_unicode_buffer(260)
+    ctypes.windll.shell32.SHGetFolderPathW(0, 0x10, 0, 0, buf)  # CSIDL_DESKTOPDIRECTORY（OneDrive 桌面也能找对）
+    paths = [os.path.join(PROGRAMS_DIR, APP_NAME + ".lnk")]
+    if buf.value:
+        paths.insert(0, os.path.join(buf.value, APP_NAME + ".lnk"))
     for p in paths:
         make_shortcut(p, "", APP_NAME, "llama-swap 控制面板")
     return paths
@@ -1040,7 +1130,7 @@ def selftest():
     steps = [("图标文件", lambda: os.path.isfile(ICON_ICO) and os.path.isfile(ICON_PNG) or 1 / 0),
              ("导入 PySide6", lambda: __import__("PySide6.QtWidgets")),
              ("导入 qfluentwidgets", lambda: __import__("qfluentwidgets")),
-             ("创建快捷方式对象", lambda: make_shortcut(None, "--start", "启动服务")),
+             ("创建快捷方式对象", lambda: _release(make_shortcut(None, "--start", "启动服务"))),
              ("登记任务栏快捷项", register_jump_list),
              ("读取 config 示例", lambda: config_models)]
     ok = True
