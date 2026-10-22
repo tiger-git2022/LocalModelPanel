@@ -41,6 +41,7 @@ NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW：子进程共用一个隐藏控制�
 NEW_GROUP = 0x00000200
 GREEN, YELLOW, RED = "#0f7b0f", "#9d5d00", "#c42b1c"
 COMMANDS = ("--show", "--start", "--stop", "--unload")
+SELFTEST_GUI = []  # 自检时：界面打开后要执行的检查（执行完自动退出）
 
 
 def log_error(where):
@@ -1107,6 +1108,14 @@ def run_gui(command=None):
         w.show()
     else:
         w.handle_command(command)
+    if SELFTEST_GUI:
+        def check():
+            try:
+                for fn in SELFTEST_GUI:
+                    fn(w)
+            finally:
+                w.quit_panel()
+        QTimer.singleShot(3000, check)
     # 每次启动都重新登记任务栏右键菜单的快捷项（程序换了位置也能自动更新）
     try:
         register_jump_list()
@@ -1133,6 +1142,23 @@ def selftest():
              ("创建快捷方式对象", lambda: _release(make_shortcut(None, "--start", "启动服务"))),
              ("登记任务栏快捷项", register_jump_list),
              ("读取 config 示例", lambda: config_models)]
+    errors = []
+    sys.excepthook = lambda *e: errors.append("".join(traceback.format_exception(*e)))
+
+    def gui_check(w):
+        w.refresh_settings_text()
+        w.switchTo(w.settings)
+        w.switchTo(w.home)
+        w.handle_command("--show")
+        w.render({"alive": True, "ok": True, "running": {"x": "ready"}, "vram": (1.0, 8.0)})
+        w.render({"alive": False, "ok": False, "running": {}, "vram": None})
+
+    def gui():
+        SELFTEST_GUI.append(gui_check)
+        run_gui()
+        if errors:
+            raise RuntimeError("界面运行时出错：\n" + "\n".join(errors))
+    steps.append(("打开界面并切换页面", gui))
     ok = True
     for name, fn in steps:
         try:
