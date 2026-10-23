@@ -1128,6 +1128,10 @@ def run_gui(command=None):
 
 def selftest():
     out = os.environ.get("SELFTEST_LOG")
+    # 卡住超过 2 分钟就打印各线程卡在哪一行并退出，免得 CI 空等几个小时
+    import faulthandler
+    if sys.stderr:
+        faulthandler.dump_traceback_later(120, exit=True)
     lines = []
 
     def say(msg):
