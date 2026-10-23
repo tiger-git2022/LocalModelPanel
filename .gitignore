@@ -6,6 +6,7 @@
 !/.github/
 !/assets/
 !/swap_panel.pyw
+!/updater.py
 !/build.bat
 !/config.example.yaml
 !/requirements.txt
