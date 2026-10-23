@@ -77,7 +77,7 @@ pythonw swap_panel.pyw
 
 本机打包：再装 `pyinstaller`，然后双击 `build.bat`，生成 `dist\LocalModelPanel\LocalModelPanel.exe`。
 
-发布新版本：改 `swap_panel.pyw` 里的 `APP_VERSION`，在 `CHANGELOG.md` 加一节 `## v版本号`，然后推送标签 `v版本号`，GitHub Actions 会自动打包并发布到 Releases。
+发布新版本：改 `swap_panel.pyw` 里的 `APP_VERSION`，在 `CHANGELOG.md` 加一节 `## v版本号`，然后合并（或推送）到 `main`。GitHub Actions 发现这个版本号还没有 `v版本号` 标签，就会自动打包、发布到 Releases 并打上标签；版本号没变时只打包检查。也可以自己推标签 `v版本号` 来发布。
 
 ## 许可
 
