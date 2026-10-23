@@ -1163,10 +1163,10 @@ def selftest():
         menu = w.tray.contextMenu()  # 托盘菜单是亚克力样式，并且能打开
         if type(menu).__name__ != "AcrylicSystemTrayMenu":
             raise RuntimeError(f"托盘菜单不是亚克力样式：{type(menu).__name__}")
-        from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import QTimer
+        # exec 可能是阻塞的（等菜单关闭才返回），所以先定好 0.5 秒后自动关菜单
+        QTimer.singleShot(500, menu.close)
         menu.exec(w.geometry().center())
-        QApplication.processEvents()
-        menu.close()
 
     def gui():
         SELFTEST_GUI.append(gui_check)
