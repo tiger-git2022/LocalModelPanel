@@ -2,6 +2,10 @@
 
 每个版本一节，标题写成 `## v版本号`。打标签发布时，GitHub Actions 会把对应的一节作为 Release 说明。
 
+## v1.0.1
+
+- 托盘图标的右键菜单改成亚克力样式：半透明磨砂背景、圆角，随深浅色主题变化（和 Claude 自动审批的托盘菜单一致）。
+
 ## v1.0.0
 
 - 首次在 GitHub 发布，由 GitHub Actions 自动打包成 zip（`LocalModelPanel.exe` 单文件夹版）。
