@@ -735,7 +735,7 @@ def run_gui(command=None):
                 self.act_update.setText(f"更新到 v{info['version']}…" if info else "检查更新…")
 
         def check_updates(self, manual):
-            if self.update_busy or (self.update_info and not manual):
+            if self.update_busy:
                 return
             self.update_busy = True
             self._set_update_action()
