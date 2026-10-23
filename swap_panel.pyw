@@ -23,8 +23,10 @@ import time
 import traceback
 import urllib.request
 
+import updater
+
 APP_NAME = "本地模型管理"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 APP_ID = "local.llama-swap.panel"  # Windows AppUserModelID：任务栏分组、跳转列表都靠它对应
 INSTANCE = "llama-swap-panel"
 FROZEN = getattr(sys, "frozen", False)
@@ -491,12 +493,12 @@ HEADLESS = {"--start": start_swap, "--stop": stop_swap, "--unload": unload}
 # ---------- 界面 ----------
 
 def run_gui(command=None):
-    from PySide6.QtCore import QObject, QPointF, Qt, QTimer, Signal
-    from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPixmap
+    from PySide6.QtCore import QObject, QPointF, Qt, QTimer, QUrl, Signal
+    from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QIcon, QPainter, QPixmap
     from PySide6.QtNetwork import QLocalServer, QLocalSocket
     from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QSystemTrayIcon, QVBoxLayout, QWidget
     from qfluentwidgets import (Action, BodyLabel, CaptionLabel, CardWidget, ComboBox, FluentIcon as FIF,
-                                FluentWindow, IconWidget, InfoBar, InfoBarPosition, LineEdit, MessageBoxBase,
+                                FluentWindow, IconWidget, InfoBar, InfoBarPosition, LineEdit, MessageBox, MessageBoxBase,
                                 NavigationItemPosition, PasswordLineEdit, PrimaryPushButton, ProgressBar, PushButton,
                                 PushSettingCard, ScrollArea, SettingCard, SettingCardGroup, Slider, StrongBodyLabel,
                                 SubtitleLabel, SwitchButton, Theme, TitleLabel, isDarkTheme, setTheme,
@@ -570,6 +572,10 @@ def run_gui(command=None):
     class Bridge(QObject):
         status = Signal(dict)
         done = Signal(str, str)  # (成功提示, 错误信息)
+        # 检查/下载更新在后台线程里做，结果回到界面线程
+        update_checked = Signal(object, object, bool)  # (新版本信息或 None, 错误, 是否手动)
+        update_progress = Signal(int)
+        update_downloaded = Signal(object, object)      # (文件路径, 错误)
 
     bridge = Bridge()
 
@@ -692,6 +698,9 @@ def run_gui(command=None):
             menu.addSeparator()
             menu.addActions([self.act_start, self.act_stop, self.act_unload])
             menu.addSeparator()
+            self.act_update = Action(FIF.SYNC, "检查更新…", triggered=lambda: self.check_updates(manual=True))
+            menu.addAction(self.act_update)
+            menu.addSeparator()
             menu.addActions([Action(FIF.CLOSE, "退出面板（服务继续运行）", triggered=self.quit_panel)])
             self.tray.setContextMenu(menu)
             self.tray.activated.connect(
@@ -704,6 +713,116 @@ def run_gui(command=None):
             self.timer = QTimer(self, interval=2000, timeout=self.poll)
             self.timer.start()
             self.poll()
+            self._init_updates()
+
+        # --- 检查更新 ---
+        def _init_updates(self):
+            """启动 20 秒后检查一次，之后每 12 小时检查一次；发现新版本时托盘弹出提示，点提示或托盘菜单更新。"""
+            self.update_info = None
+            self.update_busy = False
+            self.update_notified = None
+            bridge.update_checked.connect(self._update_checked)
+            bridge.update_progress.connect(lambda p: self.act_update.setText(f"正在下载更新… {p}%"))
+            bridge.update_downloaded.connect(self._update_downloaded)
+            self.tray.messageClicked.connect(lambda: self.update_info and self.install_update())
+            QTimer.singleShot(20000, lambda: self.check_updates(manual=False))
+            QTimer(self, interval=12 * 3600 * 1000, timeout=lambda: self.check_updates(manual=False)).start()
+
+        def _set_update_action(self):
+            self.act_update.setEnabled(not self.update_busy)
+            if not self.update_busy:
+                info = self.update_info
+                self.act_update.setText(f"更新到 v{info['version']}…" if info else "检查更新…")
+
+        def check_updates(self, manual):
+            if self.update_busy or (self.update_info and not manual):
+                return
+            self.update_busy = True
+            self._set_update_action()
+            self.act_update.setText("正在检查更新…")
+
+            def work():
+                try:
+                    bridge.update_checked.emit(updater.check(APP_VERSION), None, manual)
+                except Exception as e:  # noqa: BLE001
+                    bridge.update_checked.emit(None, e, manual)
+            threading.Thread(target=work, daemon=True).start()
+
+        def _update_checked(self, info, err, manual):
+            self.update_busy = False
+            if err is not None:
+                self._set_update_action()
+                if manual:
+                    self.show_window()
+                    self.toast(False, "检查更新失败", str(err))
+                return
+            self.update_info = info
+            self._set_update_action()
+            if not info:
+                if manual:
+                    self.show_window()
+                    self.toast(True, "已经是最新版本", f"当前 v{APP_VERSION}")
+                return
+            if manual:
+                self.install_update()
+            elif self.update_notified != info["version"]:
+                self.update_notified = info["version"]
+                self.tray.showMessage(f"{APP_NAME}有新版本 v{info['version']}",
+                                      "点这里更新，或者在托盘菜单里选“更新到 v%s”。" % info["version"],
+                                      QSystemTrayIcon.Information, 8000)
+
+        def _ask(self, title, content, yes="确定", no="取消"):
+            self.show_window()
+            box = MessageBox(title, content, self)
+            box.yesButton.setText(yes)
+            box.cancelButton.setText(no)
+            return bool(box.exec())
+
+        def _open_page(self, url):
+            QDesktopServices.openUrl(QUrl(url))
+
+        def install_update(self):
+            info = self.update_info
+            if not info or self.update_busy:
+                return
+            notes = info["notes"] if len(info["notes"]) <= 1200 else info["notes"][:1200] + "…"
+            if not updater.can_install(info):
+                if self._ask(f"发现新版本 v{info['version']}", f"当前 v{APP_VERSION}。\n\n{notes}\n\n要打开下载页面吗？", "打开下载页面"):
+                    self._open_page(info["page"])
+                return
+            if not self._ask(f"发现新版本 v{info['version']}",
+                             f"当前 v{APP_VERSION}。\n\n{notes}\n\n现在下载并更新吗？面板会先退出，完成后自动重新打开；llama-swap 服务不受影响。",
+                             "下载并更新", "以后再说"):
+                return
+            if not updater.can_write_app_dir():
+                if self._ask("没法自动更新", "面板所在的文件夹不能写入（可能放在了 Program Files 里）。要打开下载页面手动更新吗？", "打开下载页面"):
+                    self._open_page(info["page"])
+                return
+            self.update_busy = True
+            self._set_update_action()
+            self.act_update.setText("正在下载更新… 0%")
+
+            def work():
+                try:
+                    bridge.update_downloaded.emit(updater.download(info, bridge.update_progress.emit), None)
+                except Exception as e:  # noqa: BLE001
+                    bridge.update_downloaded.emit(None, e)
+            threading.Thread(target=work, daemon=True).start()
+
+        def _update_downloaded(self, path, err):
+            if err is None:
+                try:
+                    updater.start_install(path)
+                except Exception as e:  # noqa: BLE001
+                    err = e
+            self.update_busy = False
+            self._set_update_action()
+            if err is not None:
+                log_error(f"更新失败：{err}")
+                if self._ask("更新失败", f"{err}\n\n要打开下载页面手动更新吗？", "打开下载页面"):
+                    self._open_page(self.update_info["page"])
+                return
+            self.quit_panel()
 
         # --- 页面 ---
         def _build_home(self):
@@ -1160,6 +1279,11 @@ def selftest():
         w.handle_command("--show")
         w.render({"alive": True, "ok": True, "running": {"x": "ready"}, "vram": (1.0, 8.0)})
         w.render({"alive": False, "ok": False, "running": {}, "vram": None})
+        # 自动更新：后台发现新版本时托盘菜单显示“更新到 v…”（不联网，直接喂一个假结果）
+        w._update_checked({"version": "9.9.9", "notes": "", "page": "", "url": None, "sha256": None}, None, False)
+        if w.act_update.text() != "更新到 v9.9.9…":
+            raise RuntimeError(f"发现新版本后托盘菜单文字不对：{w.act_update.text()}")
+        w._update_checked(None, RuntimeError("网络不通"), False)
         menu = w.tray.contextMenu()  # 托盘菜单是亚克力样式，并且能打开
         if type(menu).__name__ != "AcrylicSystemTrayMenu":
             raise RuntimeError(f"托盘菜单不是亚克力样式：{type(menu).__name__}")
