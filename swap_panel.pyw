@@ -26,7 +26,7 @@ import urllib.request
 import updater
 
 APP_NAME = "本地模型管理"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 APP_ID = "local.llama-swap.panel"  # Windows AppUserModelID：任务栏分组、跳转列表都靠它对应
 INSTANCE = "llama-swap-panel"
 FROZEN = getattr(sys, "frozen", False)
@@ -505,6 +505,25 @@ def run_gui(command=None):
                                 setThemeColor)
     # 托盘右键菜单用亚克力样式（截取菜单后面的屏幕做模糊，半透明圆角，随深浅色主题）
     from qfluentwidgets.components.material import AcrylicSystemTrayMenu
+    from qfluentwidgets import RoundMenu
+    from PySide6.QtCore import QSize
+
+    # 修正菜单项宽度：qfluentwidgets 第一次加菜单项时样式表还没生效，按默认小字号量宽度；
+    # 又用字形墨迹宽度（boundingRect）量，全角括号、省略号会少算。结果长菜单项右边被截掉。
+    # 这里先让样式表生效，再按排版宽度（horizontalAdvance）补足，多留 12px。
+    if not getattr(RoundMenu, "_width_fixed", False):
+        _adjust_text = RoundMenu._adjustItemText
+
+        def _fit_item(self, item, action):
+            self.view.ensurePolished()
+            w = _adjust_text(self, item, action)
+            fm = self.view.fontMetrics()
+            w += max(0, fm.horizontalAdvance(item.text()) - fm.boundingRect(item.text()).width()) + 12
+            item.setSizeHint(QSize(w, self.itemHeight))
+            return w
+
+        RoundMenu._adjustItemText = _fit_item
+        RoundMenu._width_fixed = True
 
     THEMES = [("浅色", Theme.LIGHT), ("深色", Theme.DARK), ("跟随系统", Theme.AUTO)]
     # Win11 DWMWA_SYSTEMBACKDROP_TYPE：2=云母 3=亚克力（模糊透出窗口后面的内容） 4=云母 Alt；0 表示不用特效
@@ -1292,6 +1311,14 @@ def selftest():
         if menu.view.acrylicBrush.image.isNull():
             raise RuntimeError("托盘菜单的亚克力背景没有生成")
         menu.close()
+        # 菜单项够宽，文字不被截断（图标和边距约 60px + 文字排版宽度；下载进度是最长的一项）
+        w.act_update.setText("正在下载更新 100%…")
+        fm = menu.view.fontMetrics()
+        for i in range(menu.view.count()):
+            item = menu.view.item(i)
+            if item.text() and item.sizeHint().width() < 60 + fm.horizontalAdvance(item.text()):
+                raise RuntimeError(f"托盘菜单项太窄：{item.text()!r}")
+        w._update_checked(None, RuntimeError("网络不通"), False)
 
     def gui():
         SELFTEST_GUI.append(gui_check)
