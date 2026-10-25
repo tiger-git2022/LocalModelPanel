@@ -46,10 +46,27 @@ def _get(url):
     return urllib.request.urlopen(req, timeout=TIMEOUT)
 
 
+# 发版时附带的 update.json，格式和 GitHub 接口返回的发布信息一样。走的是普通下载地址，
+# 不占接口每个 IP 每小时 60 次的额度（同一网络、同一代理出口的设备共用，容易用完，报 403 rate limit exceeded）。
+MANIFEST_URL = f"{RELEASES_URL}/download/update.json"
+
+
+def _latest_release():
+    """先读 update.json；读不到（比如旧版本发布时还没有这个文件）再问 GitHub 接口。"""
+    try:
+        with _get(MANIFEST_URL) as r:
+            return json.load(r)
+    except (OSError, ValueError) as manifest_error:
+        try:
+            with _get(f"https://api.github.com/repos/{REPO}/releases/latest") as r:
+                return json.load(r)
+        except (OSError, ValueError) as api_error:
+            raise RuntimeError(f"update.json：{manifest_error}；GitHub 接口：{api_error}") from api_error
+
+
 def check(current):
     """有比 current 新的版本就返回 dict(version, notes, page, url, sha256)，否则返回 None。网络出错时抛异常。"""
-    with _get(f"https://api.github.com/repos/{REPO}/releases/latest") as r:
-        data = json.load(r)
+    data = _latest_release()
     tag = data.get("tag_name") or ""
     latest, cur = parse(tag), parse(current) or (0, 0, 0)
     if not latest or latest <= cur:

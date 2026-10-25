@@ -26,7 +26,7 @@ import urllib.request
 import updater
 
 APP_NAME = "本地模型管理"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 APP_ID = "local.llama-swap.panel"  # Windows AppUserModelID：任务栏分组、跳转列表都靠它对应
 INSTANCE = "llama-swap-panel"
 FROZEN = getattr(sys, "frozen", False)
